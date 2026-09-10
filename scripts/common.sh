@@ -136,10 +136,31 @@ fetch_repo() {
 # beats globbing for likely names: this is exactly the set `make install`
 # would ship as documentation.
 core_docs() {
+    local dir="$CORE_SRC/$CORE_SUBDIR"
     local mk="$WORK/print-docs.mk"
+    local err="$WORK/print-docs.err"
+    local declared="" docs="" f
+
     printf 'jg-ci-print-docs:\n\t@echo $(DOCS)\n' > "$mk"
-    make -C "$CORE_SRC/$CORE_SUBDIR" --no-print-directory \
-        -f Makefile -f "$mk" jg-ci-print-docs 2>/dev/null || true
+    if ! declared="$(make -C "$dir" --no-print-directory \
+                     -f Makefile -f "$mk" jg-ci-print-docs 2>"$err")"; then
+        echo "core_docs: could not read DOCS from $CORE's makefile:" >&2
+        sed 's/^/  /' "$err" >&2
+        declared=""
+    fi
+
+    # DOCS is what `make install` would ship, but a core need not declare it
+    # and an incomplete one silently costs the package a ChangeLog. Union it
+    # with the conventional names actually present in the tree.
+    for f in $declared ChangeLog CHANGELOG NEWS README README.md \
+             COPYING LICENSE AUTHORS THANKS; do
+        case " $docs " in *" $f "*) continue ;; esac
+        if [ -f "$dir/$f" ]; then
+            docs="$docs $f"
+        fi
+    done
+
+    printf '%s' "$docs"
 }
 
 # Every Jolly Good project keeps its version in a version.h that is valid C,

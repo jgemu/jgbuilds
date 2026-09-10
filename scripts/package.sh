@@ -177,7 +177,7 @@ windows)
     mkdir -p "$STAGE/docs/$BIN_NAME"
     DOCS="$(core_docs)"
     if [ -z "$DOCS" ]; then
-        echo "warning: $CORE declares no DOCS in its Makefile" >&2
+        echo "warning: found no documentation at all for $CORE" >&2
     fi
     for doc in $DOCS; do
         if [ -f "$CORE_SRC/$CORE_SUBDIR/$doc" ]; then
