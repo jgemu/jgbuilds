@@ -50,6 +50,18 @@ if [ -f "$ROOT/pins.env" ]; then
     . "$ROOT/pins.env"
 fi
 
+# Resolved before the core's .env is sourced, so a core can branch on it.
+# Cores whose toolchain differs per platform, cen64 for one, need that:
+# llvm-ar exists on Linux and MSYS2 but not in Apple's toolchain.
+# RUNNER_OS is set by GitHub Actions in every shell, msys2 included. The
+# uname fallback is for running these scripts by hand.
+case "${RUNNER_OS:-$(uname -s)}" in
+    Linux)                 PLATFORM=linux   ;;
+    macOS|Darwin)          PLATFORM=macos   ;;
+    Windows|MINGW*|MSYS*)  PLATFORM=windows ;;
+    *) echo "unsupported platform: ${RUNNER_OS:-$(uname -s)}" >&2; exit 1 ;;
+esac
+
 ENVFILE="$ROOT/cores/$CORE.env"
 if [ ! -f "$ENVFILE" ]; then
     echo "unknown core '$CORE'; expected $ENVFILE" >&2
@@ -72,12 +84,6 @@ CORE_REF="${CORE_REF:-${CORE_PIN:-master}}"
 
 # RUNNER_OS is set by GitHub Actions in every shell, msys2 included. The
 # uname fallback is for running these scripts by hand.
-case "${RUNNER_OS:-$(uname -s)}" in
-    Linux)                 PLATFORM=linux   ;;
-    macOS|Darwin)          PLATFORM=macos   ;;
-    Windows|MINGW*|MSYS*)  PLATFORM=windows ;;
-    *) echo "unsupported platform: ${RUNNER_OS:-$(uname -s)}" >&2; exit 1 ;;
-esac
 
 WORK="${WORK:-$ROOT/work}"
 DIST="${DIST:-$ROOT/dist}"
