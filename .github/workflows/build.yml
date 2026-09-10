@@ -1,0 +1,222 @@
+name: build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      cores:
+        description: 'Cores to build, space separated. Empty means all.'
+        default: ''
+      qtea_ref:
+        description: 'Override the QTea ref in pins.env'
+        default: ''
+      core_ref:
+        description: 'Override the pinned ref of every core built'
+        default: ''
+      jg_ref:
+        description: 'Override the JG API ref in pins.env'
+        default: ''
+      release:
+        description: 'Publish a release too, not just artifacts'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Works out which cores this push actually needs to rebuild.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      cores: ${{ steps.pick.outputs.cores }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: pick
+        run: |
+          all=$(ls cores/*.env | xargs -n1 basename | sed 's/\.env$//')
+
+          case "${{ github.event_name }}" in
+          workflow_dispatch)
+              list="${{ inputs.cores }}"
+              [ -n "$list" ] || list="$all"
+              ;;
+          pull_request)
+              list="$all"
+              ;;
+          push)
+              before="${{ github.event.before }}"
+              if ! git rev-parse -q --verify "${before}^{commit}" >/dev/null; then
+                  # A first push or a force push: no usable diff.
+                  list="$all"
+              else
+                  files=$(git diff --name-only "$before" "${{ github.sha }}")
+                  echo "changed files:"; echo "$files" | sed 's/^/  /'
+
+                  # Anything shared rebuilds everything; otherwise only the
+                  # cores whose own pin file moved.
+                  if echo "$files" |
+                     grep -qE '^(pins\.env|scripts/|\.github/workflows/)'; then
+                      list="$all"
+                  else
+                      list=$(echo "$files" | sed -n 's|^cores/\(.*\)\.env$|\1|p')
+                  fi
+              fi
+              ;;
+          esac
+
+          # sed rather than grep -v: an empty list must not fail the step.
+          json=$(printf '%s\n' $list | sed '/^$/d' | jq -Rc . | jq -sc .)
+          echo "cores=$json" >> "$GITHUB_OUTPUT"
+          echo "building: $json"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.cores != '[]'
+    name: ${{ matrix.core }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    strategy:
+      fail-fast: false
+      matrix:
+        core: ${{ fromJSON(needs.plan.outputs.cores) }}
+        os: [ubuntu-26.04, macos-15, windows-2025]
+        # Entries whose keys match an existing combination add properties to
+        # it rather than creating new jobs.
+        include:
+          - os: ubuntu-26.04
+            shell: bash
+          - os: macos-15
+            shell: bash
+          - os: windows-2025
+            shell: 'msys2 {0}'
+    env:
+      # Empty on a push, so the pins in the repository apply. Set only by a
+      # manual run, where they take precedence.
+      JG_REF: ${{ inputs.jg_ref }}
+      CORE_REF: ${{ inputs.core_ref }}
+      QTEA_REF: ${{ inputs.qtea_ref }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # UCRT64 rather than MINGW64: QTea's manifest sets the process code
+      # page to UTF-8, which assumes the UCRT.
+      - name: Set up MSYS2
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git make zip
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-tools
+            mingw-w64-ucrt-x86_64-sdl3
+            mingw-w64-ucrt-x86_64-libepoxy
+            mingw-w64-ucrt-x86_64-speexdsp
+            mingw-w64-ucrt-x86_64-libarchive
+            mingw-w64-ucrt-x86_64-ntldd
+
+      - name: Install dependencies
+        run: bash scripts/deps.sh "${{ matrix.core }}"
+
+      - name: Build
+        run: bash scripts/build.sh "${{ matrix.core }}"
+
+      - name: Package
+        run: bash scripts/package.sh "${{ matrix.core }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.core }}-${{ matrix.os }}
+          path: dist/*
+          if-no-files-found: error
+
+  # One release per core, named after the ref it is pinned at. Re-run with
+  # the same pin and the assets are replaced in place; move the pin and a new
+  # release appears. A core pinned to a branch is skipped: those builds are
+  # for testing and their contents change under the same name.
+  #
+  # Reached on a push, or on a manual run that ticked "release". The manual
+  # route exists so a botched release can be redone without inventing a pin
+  # change to trigger one.
+  release:
+    needs: [plan, build]
+    if: >-
+      needs.plan.outputs.cores != '[]' &&
+      (github.event_name == 'push' || inputs.release)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        core: ${{ fromJSON(needs.plan.outputs.cores) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: ref
+        run: |
+          eval "$(bash scripts/common.sh '${{ matrix.core }}')"
+          echo "core_ref=$CORE_REF" >> "$GITHUB_OUTPUT"
+          case "$CORE_REF" in
+              master|main) echo "pinned=false" >> "$GITHUB_OUTPUT" ;;
+              *)           echo "pinned=true"  >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - if: steps.ref.outputs.pinned == 'false'
+        run: |
+          echo "${{ matrix.core }} is pinned to ${{ steps.ref.outputs.core_ref }},"
+          echo "a moving branch. Artifacts only, no release."
+
+      - uses: actions/download-artifact@v4
+        if: steps.ref.outputs.pinned == 'true'
+        with:
+          pattern: ${{ matrix.core }}-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish
+        if: steps.ref.outputs.pinned == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CORE: ${{ matrix.core }}
+          CORE_REF: ${{ steps.ref.outputs.core_ref }}
+        run: |
+          tag="$CORE-$CORE_REF"
+          ls -la artifacts
+
+          # Re-running the same pin replaces the assets rather than failing,
+          # so bumping QTea alone refreshes every existing release.
+          if gh release view "$tag" >/dev/null 2>&1; then
+              echo "updating release $tag"
+              gh release upload "$tag" artifacts/* --clobber
+          else
+              # Deleting a release leaves its tag behind unless you ask for
+              # otherwise, and gh would then hang the new release off that
+              # stale tag, still pointing at the commit that built badly.
+              if git ls-remote --exit-code --tags origin "$tag" >/dev/null 2>&1
+              then
+                  echo "removing tag $tag orphaned by a deleted release"
+                  git push --delete origin "refs/tags/$tag"
+              fi
+
+              echo "creating release $tag"
+              gh release create "$tag" \
+                  --target "$GITHUB_SHA" \
+                  --title "$CORE $CORE_REF" \
+                  --notes "QTea built against $CORE $CORE_REF." \
+                  artifacts/*
+          fi
