@@ -95,7 +95,12 @@ CORE_OUT="$CORE_SRC/$CORE_SUBDIR/$CORE_OUTDIR"
 # The name QTea gives the executable: the core name minus any -jg suffix.
 BIN_NAME="${CORE%-jg}"
 
-export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+# Both directories: the JG API installs jg.pc to share/pkgconfig, which is
+# the conventional spot for a headers-only package with nothing
+# architecture-dependent to describe. pkg-config searches share/pkgconfig
+# under the system prefixes by default but knows nothing about ours, so it
+# has to be named explicitly.
+export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig:${PKG_CONFIG_PATH:-}"
 
 log() { printf '\n==> %s\n' "$*"; }
 
