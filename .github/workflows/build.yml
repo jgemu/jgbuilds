@@ -34,7 +34,7 @@ jobs:
     outputs:
       cores: ${{ steps.pick.outputs.cores }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -106,7 +106,7 @@ jobs:
       QTEA_REF: ${{ inputs.qtea_ref }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # UCRT64 rather than MINGW64: QTea's manifest sets the process code
       # page to UTF-8, which assumes the UCRT.
@@ -139,7 +139,7 @@ jobs:
       - name: Package
         run: bash scripts/package.sh "${{ matrix.core }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.core }}-${{ matrix.os }}
           path: dist/*
@@ -165,7 +165,7 @@ jobs:
       matrix:
         core: ${{ fromJSON(needs.plan.outputs.cores) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: ref
         run: |
@@ -181,7 +181,7 @@ jobs:
           echo "${{ matrix.core }} is pinned to ${{ steps.ref.outputs.core_ref }},"
           echo "a moving branch. Artifacts only, no release."
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         if: steps.ref.outputs.pinned == 'true'
         with:
           pattern: ${{ matrix.core }}-*
