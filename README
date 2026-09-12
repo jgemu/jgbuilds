@@ -9,3 +9,9 @@ QTea may be linked against emulator cores using The Jolly Good API:
 
 The result is what feels like a traditional standalone emulator, using a
 whitelabel frontend. This repository is used to perform binary releases.
+
+Minimum System Requirements
+---------------------------
+Windows 10+
+macOS 15+
+Ubuntu 26.04+
